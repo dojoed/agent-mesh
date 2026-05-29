@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Agent {
+  id        String   @id
+  name      String
+  org       String
+  kind      String   @default("agent")
+  color     String?
+  lastSeen  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([org])
+  @@index([lastSeen])
+}
+
+model Event {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String?
+  type      String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([fromId])
+  @@index([toId])
+}
