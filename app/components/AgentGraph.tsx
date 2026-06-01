@@ -17,6 +17,7 @@ type GraphNode = {
   org: string;
   kind: string;
   color: string;
+  lastSeen: number;
   x?: number;
   y?: number;
 };
@@ -32,14 +33,37 @@ type Props = {
   agents: AgentNode[];
   events: EventRow[];
   liveEvent: EventRow | null;
+  selected: string | null;
   onSelect: (id: string | null) => void;
 };
 
-export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
+// Recency drives how alive a node looks: full brightness for the last 5 min of
+// activity, fading to a dim "ghost" floor by the 60-min mark. Combined with the
+// per-event pulse, this lets the eye instantly find what's running *now*.
+const FRESH_MS = 5 * 60 * 1000;
+const STALE_MS = 60 * 60 * 1000;
+const GHOST_FLOOR = 0.16;
+
+function recencyAlpha(ageMs: number): number {
+  if (ageMs <= FRESH_MS) return 1;
+  if (ageMs >= STALE_MS) return GHOST_FLOOR;
+  const t = (ageMs - FRESH_MS) / (STALE_MS - FRESH_MS);
+  return 1 - t * (1 - GHOST_FLOOR);
+}
+
+export function AgentGraph({ agents, events, liveEvent, selected, onSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const lastActivityRef = useRef<Map<string, number>>(new Map());
+  // Focus state (hovered, else selected) + its neighbour set, read by the
+  // canvas/link accessors. Kept in a ref so we don't rebuild the accessors —
+  // the simulation runs continuously and reads the latest value each frame.
+  const focusRef = useRef<{ id: string | null; neighbors: Set<string> }>({
+    id: null,
+    neighbors: new Set(),
+  });
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
   const data = useMemo(() => {
@@ -49,6 +73,7 @@ export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
       org: a.org,
       kind: a.kind,
       color: a.color ?? colorForOrg(a.org),
+      lastSeen: new Date(a.lastSeen).getTime(),
     }));
 
     const linkMap = new Map<string, GraphLink>();
@@ -70,6 +95,23 @@ export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
     }
     return { nodes, links: Array.from(linkMap.values()) };
   }, [agents, events]);
+
+  // Recompute the focus + neighbour set whenever the hover/selection or the
+  // edge set changes.
+  useEffect(() => {
+    const id = hoveredId ?? selected;
+    const neighbors = new Set<string>();
+    if (id) {
+      neighbors.add(id);
+      for (const l of data.links) {
+        const s = asId(l.source);
+        const t = asId(l.target);
+        if (s === id) neighbors.add(t);
+        if (t === id) neighbors.add(s);
+      }
+    }
+    focusRef.current = { id, neighbors };
+  }, [hoveredId, selected, data.links]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -141,7 +183,16 @@ export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
           cooldownTime={Infinity}
           d3VelocityDecay={0.35}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          linkColor={((l: any) => withAlpha((l as GraphLink).color, 0.35)) as never}
+          linkColor={((l: any) => {
+            const link = l as GraphLink;
+            const { id, neighbors } = focusRef.current;
+            const alpha = id
+              ? neighbors.has(asId(link.source)) && neighbors.has(asId(link.target))
+                ? 0.55
+                : 0.05
+              : 0.32;
+            return withAlpha(link.color, alpha);
+          }) as never}
           linkWidth={
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ((l: any) =>
@@ -157,34 +208,63 @@ export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
           }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onNodeClick={((node: any) => onSelect((node as GraphNode).id)) as never}
+          onBackgroundClick={(() => onSelect(null)) as never}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          onNodeHover={((node: any) => {
+            setHoveredId(node ? (node as GraphNode).id : null);
+            if (containerRef.current) {
+              containerRef.current.style.cursor = node ? "pointer" : "default";
+            }
+          }) as never}
           nodeCanvasObject={
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ((rawNode: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
               const node = rawNode as GraphNode;
               const now = Date.now();
-              const lastAct = lastActivityRef.current.get(node.id) ?? 0;
+              const lastAct = Math.max(
+                lastActivityRef.current.get(node.id) ?? 0,
+                node.lastSeen,
+              );
               const since = now - lastAct;
               const pulse = since < 1800 ? Math.max(0, 1 - since / 1800) : 0;
+
+              // Idle nodes dim toward a ghost floor; the focused node and its
+              // neighbours stay lit while everything else recedes.
+              const { id: focusId, neighbors } = focusRef.current;
+              const recency = recencyAlpha(since);
+              const focusMul = !focusId ? 1 : neighbors.has(node.id) ? 1 : 0.12;
+              const isFocus = focusId === node.id;
+              const alive = Math.min(1, recency + pulse) * focusMul;
+
               const baseR = 6;
               const r = baseR + pulse * 6;
               const x = node.x ?? 0;
               const y = node.y ?? 0;
 
               const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
-              grd.addColorStop(0, withAlpha(node.color, 0.55 + pulse * 0.4));
-              grd.addColorStop(0.5, withAlpha(node.color, 0.12));
+              grd.addColorStop(0, withAlpha(node.color, (0.5 + pulse * 0.4) * alive));
+              grd.addColorStop(0.5, withAlpha(node.color, 0.12 * alive));
               grd.addColorStop(1, withAlpha(node.color, 0));
               ctx.fillStyle = grd;
               ctx.beginPath();
               ctx.arc(x, y, r * 4, 0, Math.PI * 2);
               ctx.fill();
 
-              ctx.fillStyle = node.color;
+              // Selection / hover ring.
+              if (isFocus) {
+                ctx.strokeStyle = withAlpha("#ffffff", 0.85);
+                ctx.lineWidth = 1.5 / globalScale;
+                ctx.beginPath();
+                ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+
+              ctx.fillStyle = withAlpha(node.color, Math.max(GHOST_FLOOR, alive));
               ctx.beginPath();
               ctx.arc(x, y, r, 0, Math.PI * 2);
               ctx.fill();
 
-              ctx.fillStyle = "rgba(255,255,255,0.85)";
+              ctx.fillStyle = withAlpha("#ffffff", 0.85 * alive);
               ctx.beginPath();
               ctx.arc(x - r * 0.3, y - r * 0.3, r * 0.35, 0, Math.PI * 2);
               ctx.fill();
@@ -193,7 +273,7 @@ export function AgentGraph({ agents, events, liveEvent, onSelect }: Props) {
               ctx.font = `${fontSize}px var(--font-geist-mono), ui-monospace, monospace`;
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
-              ctx.fillStyle = withAlpha("#e5e7ff", 0.9);
+              ctx.fillStyle = withAlpha("#e5e7ff", 0.9 * Math.max(0.35, alive));
               ctx.fillText(node.name, x, y + r + 6);
             }) as never
           }

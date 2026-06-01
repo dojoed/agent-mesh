@@ -85,6 +85,7 @@ export default function Home() {
         agents={agents}
         events={events}
         liveEvent={liveEvent}
+        selected={selected}
         onSelect={setSelected}
       />
 
