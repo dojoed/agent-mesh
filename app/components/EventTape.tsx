@@ -120,7 +120,19 @@ export function EventTape({ events, agents }: Props) {
                 <span style={{ color: fromColor }} className="shrink-0">
                   {from?.name ?? e.fromId}
                 </span>
-                <span className="text-zinc-500 shrink-0">{e.type}</span>
+                <span
+                  className="shrink-0"
+                  style={{
+                    color: e.type === "run_error" ? "#f87171" : undefined,
+                  }}
+                >
+                  {e.type}
+                </span>
+                {e.type === "run_error" && errMsg(e.payload) && (
+                  <span className="text-red-300/70 truncate">
+                    {errMsg(e.payload)}
+                  </span>
+                )}
                 {to && (
                   <>
                     <span className="text-zinc-600">→</span>
@@ -170,6 +182,14 @@ function FilterChip({
       {children}
     </button>
   );
+}
+
+function errMsg(payload: unknown): string | null {
+  if (payload && typeof payload === "object" && "error" in payload) {
+    const v = (payload as Record<string, unknown>).error;
+    if (typeof v === "string") return v;
+  }
+  return null;
 }
 
 function formatTime(iso: string): string {

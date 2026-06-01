@@ -3,15 +3,17 @@
 import { useMemo } from "react";
 import type { AgentNode, EventRow } from "@/lib/types";
 import { colorForOrg } from "@/lib/colors";
+import { type AgentStatus, STATE_COLOR, STATE_LABEL } from "@/lib/status";
 
 type Props = {
   agentId: string | null;
   agents: AgentNode[];
   events: EventRow[];
+  status: AgentStatus | null;
   onClose: () => void;
 };
 
-export function AgentPanel({ agentId, agents, events, onClose }: Props) {
+export function AgentPanel({ agentId, agents, events, status, onClose }: Props) {
   const agent = useMemo(
     () => (agentId ? agents.find((a) => a.id === agentId) : null),
     [agentId, agents],
@@ -39,6 +41,18 @@ export function AgentPanel({ agentId, agents, events, onClose }: Props) {
               style={{ background: color, boxShadow: `0 0 12px ${color}` }}
             />
             <span className="chip text-zinc-400">{agent.org}</span>
+            {status && (
+              <span
+                className="chip rounded-full px-1.5 py-0.5"
+                style={{
+                  color: STATE_COLOR[status.state],
+                  background: `${STATE_COLOR[status.state]}1f`,
+                  border: `1px solid ${STATE_COLOR[status.state]}55`,
+                }}
+              >
+                {STATE_LABEL[status.state]}
+              </span>
+            )}
           </div>
           <div className="mt-2 text-lg font-semibold tracking-tight">
             {agent.name}
@@ -57,7 +71,30 @@ export function AgentPanel({ agentId, agents, events, onClose }: Props) {
       <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
         <Stat label="Kind" value={agent.kind} />
         <Stat label="Last seen" value={timeAgo(agent.lastSeen)} />
+        {status && status.runs > 0 && (
+          <Stat label="Runs seen" value={`${status.runs}`} />
+        )}
+        {status && status.lastDurationMs != null && (
+          <Stat label="Last run" value={fmtDuration(status.lastDurationMs)} />
+        )}
       </div>
+
+      {status?.lastError && (
+        <div
+          className="mt-4 rounded-lg p-3 text-xs"
+          style={{
+            background: `${STATE_COLOR.error}14`,
+            border: `1px solid ${STATE_COLOR.error}40`,
+          }}
+        >
+          <div className="chip mb-1" style={{ color: STATE_COLOR.error }}>
+            Last error{status.errors > 1 ? ` · ${status.errors}×` : ""}
+          </div>
+          <div className="text-zinc-300 font-mono break-words">
+            {status.lastError}
+          </div>
+        </div>
+      )}
 
       <div className="mt-5">
         <div className="chip text-zinc-500 mb-2">Recent activity</div>
@@ -70,7 +107,16 @@ export function AgentPanel({ agentId, agents, events, onClose }: Props) {
                 <span className="text-zinc-500 mr-2">
                   {new Date(e.createdAt).toLocaleTimeString([], { hour12: false })}
                 </span>
-                <span className="text-cyan-300">{e.type}</span>
+                <span
+                  style={
+                    e.type === "run_error"
+                      ? { color: STATE_COLOR.error }
+                      : undefined
+                  }
+                  className={e.type === "run_error" ? "" : "text-cyan-300"}
+                >
+                  {e.type}
+                </span>
                 {e.fromId === agent.id && e.toId && (
                   <span className="text-zinc-500"> → {e.toId}</span>
                 )}
@@ -93,6 +139,12 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-zinc-200 mt-0.5">{value}</div>
     </div>
   );
+}
+
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 function timeAgo(iso: string): string {

@@ -28,7 +28,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <div className="starfield" />
+        <div className="nebula" aria-hidden />
+        <div className="stars stars-far" aria-hidden />
+        <div className="stars stars-mid" aria-hidden />
+        <div className="stars stars-near" aria-hidden />
         {children}
       </body>
     </html>

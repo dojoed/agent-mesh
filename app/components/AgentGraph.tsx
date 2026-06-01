@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { forceX, forceY } from "d3-force";
 import { colorForOrg } from "@/lib/colors";
+import { type AgentStatus, STATE_COLOR } from "@/lib/status";
 import type { AgentNode, EventRow } from "@/lib/types";
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
@@ -34,6 +35,7 @@ type Props = {
   events: EventRow[];
   liveEvent: EventRow | null;
   selected: string | null;
+  statusByAgent: Map<string, AgentStatus>;
   onSelect: (id: string | null) => void;
 };
 
@@ -51,11 +53,22 @@ function recencyAlpha(ageMs: number): number {
   return 1 - t * (1 - GHOST_FLOOR);
 }
 
-export function AgentGraph({ agents, events, liveEvent, selected, onSelect }: Props) {
+export function AgentGraph({
+  agents,
+  events,
+  liveEvent,
+  selected,
+  statusByAgent,
+  onSelect,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
   const lastActivityRef = useRef<Map<string, number>>(new Map());
+  // Read by the continuously-redrawing canvas, so health changes show up
+  // without rebuilding the accessors.
+  const statusRef = useRef(statusByAgent);
+  statusRef.current = statusByAgent;
   // Focus state (hovered, else selected) + its neighbour set, read by the
   // canvas/link accessors. Kept in a ref so we don't rebuild the accessors —
   // the simulation runs continuously and reads the latest value each frame.
@@ -234,7 +247,15 @@ export function AgentGraph({ agents, events, liveEvent, selected, onSelect }: Pr
               const recency = recencyAlpha(since);
               const focusMul = !focusId ? 1 : neighbors.has(node.id) ? 1 : 0.12;
               const isFocus = focusId === node.id;
-              const alive = Math.min(1, recency + pulse) * focusMul;
+
+              // Health overrides looks: errored/stuck nodes glow in their alert
+              // colour and refuse to dim, so a failure is impossible to miss.
+              const status = statusRef.current.get(node.id);
+              const alert =
+                status?.state === "error" || status?.state === "stuck";
+              const drawColor = alert ? STATE_COLOR[status!.state] : node.color;
+              const baseAlive = Math.min(1, recency + pulse) * focusMul;
+              const alive = alert ? Math.max(baseAlive, 0.95) : baseAlive;
 
               const baseR = 6;
               const r = baseR + pulse * 6;
@@ -242,13 +263,23 @@ export function AgentGraph({ agents, events, liveEvent, selected, onSelect }: Pr
               const y = node.y ?? 0;
 
               const grd = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
-              grd.addColorStop(0, withAlpha(node.color, (0.5 + pulse * 0.4) * alive));
-              grd.addColorStop(0.5, withAlpha(node.color, 0.12 * alive));
-              grd.addColorStop(1, withAlpha(node.color, 0));
+              grd.addColorStop(0, withAlpha(drawColor, (0.5 + pulse * 0.4) * alive));
+              grd.addColorStop(0.5, withAlpha(drawColor, 0.12 * alive));
+              grd.addColorStop(1, withAlpha(drawColor, 0));
               ctx.fillStyle = grd;
               ctx.beginPath();
               ctx.arc(x, y, r * 4, 0, Math.PI * 2);
               ctx.fill();
+
+              // Pulsing alert ring on unhealthy agents.
+              if (alert) {
+                const beat = 0.5 + 0.5 * Math.sin(now / 320);
+                ctx.strokeStyle = withAlpha(drawColor, 0.4 + 0.5 * beat);
+                ctx.lineWidth = 2 / globalScale;
+                ctx.beginPath();
+                ctx.arc(x, y, r + 5 + beat * 4, 0, Math.PI * 2);
+                ctx.stroke();
+              }
 
               // Selection / hover ring.
               if (isFocus) {
@@ -259,7 +290,7 @@ export function AgentGraph({ agents, events, liveEvent, selected, onSelect }: Pr
                 ctx.stroke();
               }
 
-              ctx.fillStyle = withAlpha(node.color, Math.max(GHOST_FLOOR, alive));
+              ctx.fillStyle = withAlpha(drawColor, Math.max(GHOST_FLOOR, alive));
               ctx.beginPath();
               ctx.arc(x, y, r, 0, Math.PI * 2);
               ctx.fill();

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentGraph } from "./components/AgentGraph";
 import { EventTape } from "./components/EventTape";
 import { AgentPanel } from "./components/AgentPanel";
 import { MeshHeader } from "./components/MeshHeader";
 import type { AgentNode, EventRow, StateSnapshot } from "@/lib/types";
+import { computeAllStatuses } from "@/lib/status";
 
 const MAX_EVENTS = 400;
 
@@ -15,8 +16,21 @@ export default function Home() {
   const [liveEvent, setLiveEvent] = useState<EventRow | null>(null);
   const [connected, setConnected] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  // Ticks every few seconds so time-derived state (a run going "stuck", idle
+  // fade) advances even when no new events are arriving.
+  const [now, setNow] = useState(() => Date.now());
   const eventsRef = useRef<EventRow[]>([]);
   const agentsRef = useRef<AgentNode[]>([]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  const statusByAgent = useMemo(
+    () => computeAllStatuses(agents.map((a) => a.id), events, now),
+    [agents, events, now],
+  );
 
   useEffect(() => {
     eventsRef.current = events;
@@ -86,14 +100,19 @@ export default function Home() {
         events={events}
         liveEvent={liveEvent}
         selected={selected}
+        statusByAgent={statusByAgent}
         onSelect={setSelected}
       />
+
+      <div className="vignette" />
+
 
       <div className="absolute top-4 left-4 right-4 z-10 pointer-events-none">
         <MeshHeader
           agents={agents}
           connected={connected}
           eventsTotal={events.length}
+          statusByAgent={statusByAgent}
         />
       </div>
 
@@ -103,6 +122,7 @@ export default function Home() {
             agentId={selected}
             agents={agents}
             events={events}
+            status={statusByAgent.get(selected) ?? null}
             onClose={() => setSelected(null)}
           />
         </div>
